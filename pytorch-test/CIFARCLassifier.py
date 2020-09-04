@@ -5,6 +5,7 @@ from torch.nn import functional as F
 import foolbox as fb
 import torchvision
 from torchvision.datasets import CIFAR10
+from torch.nn.utils import prune
 
 
 class CIFARCLassifier(pl.LightningModule):
@@ -21,7 +22,7 @@ class CIFARCLassifier(pl.LightningModule):
         self.fc1 = nn.Linear(32 * 4 * 4, 128)
         self.do1 = nn.Dropout(0.25)
         self.fc2 = nn.Linear(128, 10)
-        self.cw = fb.attacks.L2FastGradientAttack()
+        self.cw = fb.attacks.L2CarliniWagnerAttack()
         self.adv_model = fb.PyTorchModel(self, bounds=(0,1))
 
     def forward(self, x):
@@ -32,6 +33,11 @@ class CIFARCLassifier(pl.LightningModule):
         x = self.do1(F.relu(self.fc1(x)))
         x = F.relu(self.fc2(x))
         return F.log_softmax(x, dim=1)
+
+
+    def perform_pruning(self):
+        prune.random_unstructured(module=self.fc1, name='weight', amount=0.2)
+
 
     def prepare_data(self):
         #download the data, augment and normalize them
@@ -73,30 +79,23 @@ class CIFARCLassifier(pl.LightningModule):
         the tensor whereas the adversarial loss function is different, and this makes the
         the optimization completely break apart.
         -----------------------WARNING------------------------------------
-        '''
-        self.zero_grad()
-        self.adv_model = fb.PyTorchModel(self, bounds=(0,1))
+        ''' 
         return {'loss' : avg_loss, 'log' : logs}
+
 
     def validation_step(self, validation_batch, batch_idx):
         if batch_idx == 0:
             torch.cuda.memory_summary()
         
         data, label = validation_batch
-
         #standard inference
         out = self.forward(data)
         loss = F.nll_loss(out, label)
         prediction = out.argmax(dim=1, keepdim=True).squeeze()
         correct =  prediction.eq(label.view_as(prediction)).sum().item()
-        
-        with torch.enable_grad():  
-            _, _, success = self.cw(self.adv_model, data, label, epsilons=[0.001])
-            successful_attack_no = torch.sum(success.long())
-            
-        return {'loss' : loss, 'correct' : correct, 'successful_attack_no' : successful_attack_no}
-        
-        #return {'loss' : loss, 'correct' : correct, 'adv_correct' : 1}
+
+        return {'loss' : loss, 'correct' : correct}
+
 
     def validation_epoch_end(self, outputs):
         #end of an epoch
@@ -104,15 +103,32 @@ class CIFARCLassifier(pl.LightningModule):
         avg_loss = torch.stack([x['loss'] for x in outputs]).mean()
         accuracy = 100. * (sum([x['correct'] for x in outputs]) / float(len(self.cifar_val)))
 
-        #adv_avg_loss = torch.stack([x['adv_loss'] for x in outputs]).mean()
-        robust_accuracy = 100. * (1-((sum([x['successful_attack_no'] for x in outputs]) / float(len(self.cifar_val)))))
-
+        robust_accuracy = self.adversarial_validation()
+        #print("Total successful_attack no:{}, Total Attacks: {},  Attack Accuracy:{}".format(succesful_attack_no, len(self.cifar_val), robust_accuracy))
+    
         logs = {'validation_loss': avg_loss, 'validation_accuracy': accuracy, 'robust_accuracy': robust_accuracy}
         return {'loss' : avg_loss, 'log' : logs}
 
 
+    def adversarial_validation(self):
+        val_dataloader = self.val_dataloader()
+        print(len(self.cifar_val))
+        self.eval()
+        adv_model = fb.PyTorchModel(self, bounds=(0,1))
+        successful_attack_sum = 0
+        
+        with torch.enable_grad():
+            for batch_id, (data, label) in enumerate(val_dataloader):
+                data, label = data.cuda(), label.cuda()
+                _, _, success = self.cw(adv_model, data, label, epsilons=[0.01])
+                successful_attack_no = torch.sum(success.long())
+                #print("Successful attack:{} Attack count:{} Percentage:{}".format(successful_attack_no, len(label), float(successful_attack_no) /len(label)))
+                successful_attack_sum += successful_attack_no
+
+        print("Successful attack:{} Attack count:{} Percentage:{}".format(successful_attack_sum, len(self.cifar_val), float(successful_attack_sum) /len(self.cifar_val)))
+        robust_accuracy = 100. * (1-(float(successful_attack_sum) /len(self.cifar_val))) 
+        return robust_accuracy
+
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=0.001)
-
-
 
