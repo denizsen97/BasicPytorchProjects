@@ -5,8 +5,9 @@ from torch.nn import functional as F
 import foolbox as fb
 import torchvision
 from torchvision.datasets import CIFAR10
+from pytorch_lightning.loggers import TensorBoardLogger
 from torch.nn.utils import prune
-
+from copy import deepcopy
 
 class CIFARCLassifier(pl.LightningModule):
     def __init__(self):
@@ -23,7 +24,6 @@ class CIFARCLassifier(pl.LightningModule):
         self.do1 = nn.Dropout(0.25)
         self.fc2 = nn.Linear(128, 10)
         self.cw = fb.attacks.L2CarliniWagnerAttack()
-        self.adv_model = fb.PyTorchModel(self, bounds=(0,1))
 
     def forward(self, x):
         x = self.pool(self.bn1(F.relu(self.conv1(x))))
@@ -46,10 +46,10 @@ class CIFARCLassifier(pl.LightningModule):
         self.cifar_val = CIFAR10(root="data/", train=False, transform=torchvision.transforms.Compose([ torchvision.transforms.ToTensor(), torchvision.transforms.Normalize(0.5, 0.5)]))
 
     def train_dataloader(self):
-        return torch.utils.data.DataLoader(self.cifar_train, batch_size=128, shuffle=True)
+        return torch.utils.data.DataLoader(self.cifar_train, batch_size=128, shuffle=True, num_workers=12)
 
     def val_dataloader(self):
-        return torch.utils.data.DataLoader(self.cifar_val, batch_size=128, shuffle=False)
+        return torch.utils.data.DataLoader(self.cifar_val, batch_size=128, shuffle=False, num_workers=12)
 
     def training_step(self, train_batch, batch_idx):
         #1 batch of training
@@ -80,6 +80,7 @@ class CIFARCLassifier(pl.LightningModule):
         the optimization completely break apart.
         -----------------------WARNING------------------------------------
         ''' 
+
         return {'loss' : avg_loss, 'log' : logs}
 
 
@@ -103,16 +104,22 @@ class CIFARCLassifier(pl.LightningModule):
         avg_loss = torch.stack([x['loss'] for x in outputs]).mean()
         accuracy = 100. * (sum([x['correct'] for x in outputs]) / float(len(self.cifar_val)))
 
-        robust_accuracy = self.adversarial_validation()
+
+        a = list(self.conv1.named_parameters())
+
+        #robust_accuracy = self.adversarial_validation()
+        robust_accuracy = 123
+        print("Are lists equal?")
+        print(list(self.conv1.named_parameters()) == a)
+
+
         #print("Total successful_attack no:{}, Total Attacks: {},  Attack Accuracy:{}".format(succesful_attack_no, len(self.cifar_val), robust_accuracy))
-    
         logs = {'validation_loss': avg_loss, 'validation_accuracy': accuracy, 'robust_accuracy': robust_accuracy}
         return {'loss' : avg_loss, 'log' : logs}
 
 
     def adversarial_validation(self):
         val_dataloader = self.val_dataloader()
-        print(len(self.cifar_val))
         self.eval()
         adv_model = fb.PyTorchModel(self, bounds=(0,1))
         successful_attack_sum = 0
@@ -125,10 +132,33 @@ class CIFARCLassifier(pl.LightningModule):
                 #print("Successful attack:{} Attack count:{} Percentage:{}".format(successful_attack_no, len(label), float(successful_attack_no) /len(label)))
                 successful_attack_sum += successful_attack_no
 
+        self.zero_grad()
+
         print("Successful attack:{} Attack count:{} Percentage:{}".format(successful_attack_sum, len(self.cifar_val), float(successful_attack_sum) /len(self.cifar_val)))
         robust_accuracy = 100. * (1-(float(successful_attack_sum) /len(self.cifar_val))) 
         return robust_accuracy
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=0.001)
+        return torch.optim.SGD(self.parameters(), lr=0.01, momentum=0.9)
+
+
+class ThresholdPruning(prune.BasePruningMethod):
+    
+    PRUNING_TYPE = 'unstructured'
+
+    def compute_mask(self, t, default_mask):
+        mask = default_mask.clone()
+
+        torch.gt()
+
+        return mask
+
+
+model = CIFARCLassifier()
+model.prepare_data()
+logger = TensorBoardLogger('tb_logs', name="adversarial_cifar10_model")
+trainer = pl.Trainer(max_epochs=5, logger=logger, gpus=[0], fast_dev_run=False)
+trainer.fit(model)
+
+model.adversarial_validation()
 
