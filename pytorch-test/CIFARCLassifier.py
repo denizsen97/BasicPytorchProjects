@@ -8,6 +8,7 @@ from torchvision.datasets import CIFAR10
 from pytorch_lightning.loggers import TensorBoardLogger
 from torch.nn.utils import prune
 from copy import deepcopy
+import utils
 
 class CIFARCLassifier(pl.LightningModule):
     def __init__(self):
@@ -41,9 +42,9 @@ class CIFARCLassifier(pl.LightningModule):
 
     def prepare_data(self):
         #download the data, augment and normalize them
-        self.cifar_train = CIFAR10(root="data/", train=True, transform=torchvision.transforms.Compose([torchvision.transforms.ToTensor(), torchvision.transforms.Normalize(0.5, 0.5)]))
+        self.cifar_train = CIFAR10(root="data/", train=True, transform=torchvision.transforms.Compose([torchvision.transforms.ToTensor(), utils.toYCbCr(), torchvision.transforms.Normalize(0.5, 0.5)]))
 
-        self.cifar_val = CIFAR10(root="data/", train=False, transform=torchvision.transforms.Compose([ torchvision.transforms.ToTensor(), torchvision.transforms.Normalize(0.5, 0.5)]))
+        self.cifar_val = CIFAR10(root="data/", train=False, transform=torchvision.transforms.Compose([ torchvision.transforms.ToTensor(), utils.toYCbCr(), torchvision.transforms.Normalize(0.5, 0.5)]))
 
     def train_dataloader(self):
         return torch.utils.data.DataLoader(self.cifar_train, batch_size=128, shuffle=True, num_workers=12)
@@ -109,9 +110,6 @@ class CIFARCLassifier(pl.LightningModule):
 
         #robust_accuracy = self.adversarial_validation()
         robust_accuracy = 123
-        print("Are lists equal?")
-        print(list(self.conv1.named_parameters()) == a)
-
 
         #print("Total successful_attack no:{}, Total Attacks: {},  Attack Accuracy:{}".format(succesful_attack_no, len(self.cifar_val), robust_accuracy))
         logs = {'validation_loss': avg_loss, 'validation_accuracy': accuracy, 'robust_accuracy': robust_accuracy}
@@ -149,8 +147,6 @@ class ThresholdPruning(prune.BasePruningMethod):
     def compute_mask(self, t, default_mask):
         mask = default_mask.clone()
 
-        torch.gt()
-
         return mask
 
 
@@ -161,4 +157,3 @@ trainer = pl.Trainer(max_epochs=5, logger=logger, gpus=[0], fast_dev_run=False)
 trainer.fit(model)
 
 model.adversarial_validation()
-
